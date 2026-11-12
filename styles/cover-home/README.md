@@ -5,7 +5,7 @@
 参考图：**图1 正面产品图**（`assets/products/`，保证产品准确）+ **图2 家居嵌入实景**（`assets/scenes/`，学嵌入方式和氛围）。
 
 ```bash
-python3 -m poster generate --style cover-home --content content/examples/润玉白_AA21C.json --count 2 --image assets/products/润玉白_AA21C_正面.png assets/scenes/润玉白_AA21C_家居_01.png
+python3 -m poster generate --style cover-home --content content/examples/润玉白_AA21C.json --count 2 --image assets/products/<正面图> assets/scenes/<家居图>
 ```
 
 ## 固定风格
@@ -44,7 +44,4 @@ python3 -m poster generate --style cover-home --content content/examples/润玉�
 
 链接可能过期；完整 prompt 见 [`samples.json`](samples.json)。核对项：嵌入感 / 颜色纹理与图1一致 / 宽高比约 1:2.16 / 门上原有铭牌保留 / 无额外 logo / 文字无错。
 
-| 编号 | 型号 | `--pick` | seed | 图 | 核对结果 |
-|---|---|---|---|---|---|
-| r1-1 | KCG89AA21C 润玉白 | `1,3,1,2,1,2,2` | 1861088033 | [看图](https://dashscope-a717.oss-accelerate.aliyuncs.com/1d/9b/20261112/ed759433/1fd485e3-f32f-45c0-9949-c9bac275aa5f_qwen_image3_serving_output_0.png?Expires=1794562687&OSSAccessKeyId=LTAI5tPxpiCM2hjmWrFXrym1&Signature=T%2BzRMx1%2B7PXAT8ZsHpaRl0R8%2B6U%3D) |  |
-| r1-2 | KCG89AA21C 润玉白 | `1,1,1,2,1,3,3` | 852594976 | [看图](https://dashscope-a717.oss-accelerate.aliyuncs.com/1d/5f/20261112/ed759433/229b8f5e-1f31-4533-b24a-9ffe45c07c4f_qwen_image3_serving_output_0.png?Expires=1794562689&OSSAccessKeyId=LTAI5tPxpiCM2hjmWrFXrym1&Signature=zj4mIcYR52NaavVLIOBWVwTXnmU%3D) |  |
+尚未出图：等待品牌方新素材（4 款测试款的正面产品图 + 家居嵌入实景图）。
