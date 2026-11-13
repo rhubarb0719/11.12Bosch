@@ -81,10 +81,17 @@ def run_scene(a):
     outdir = ROOT / "output" / ("scene-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
     outdir.mkdir(parents=True)
     prod = C.cutout(a.product)
-    canvas, layer, box = C.place(prod, a.height, a.x, a.bottom)
+    quad = json.loads(Path(a.front_quad).read_text(encoding="utf-8"))["front_quad"] if a.front_quad else None
+    if quad:
+        canvas, layer, side_l, box = C.place_faces(prod, quad, a.height, a.x, a.bottom)
+        trans = [int(t) for t in a.transparency.split(",")]
+    else:
+        canvas, layer, box = C.place(prod, a.height, a.x, a.bottom)
     canvas.save(outdir / "00_canvas.jpg", quality=92)
     images = [_img_data_url(canvas)] + ([to_image_ref(a.ref)] if a.ref else [])
-    content = {"参考图说明": "整体家居风格和氛围参考图2，但不要照搬图2的布局。" if a.ref else ""}
+    content = {"参考图说明": "整体家居风格和氛围参考图2，但不要照搬图2的布局。" if a.ref else "",
+               "遮挡说明": ("冰箱只露出正面，冰箱的侧面和顶面位置也是灰色，请在那里画出相邻高柜的柜体和上方吊柜，"
+                         "把冰箱的侧面和顶面完全挡住，柜体正面与冰箱正面齐平。") if quad else ""}
     client, recs = CRClient(key), []
     for i in range(a.count):
         idx = picks_for(style, a, i)
@@ -104,7 +111,15 @@ def run_scene(a):
             raw = outdir / f"{i + 1:02d}_raw.png"
             client.download(urls[0], raw)
             gen = Image.open(raw)
-            final = C.paste_back(gen, layer)
+            if quad:
+                V = C.cabinet_variants(gen, layer, side_l, trans)
+                for t, im in V.items():
+                    im.save(outdir / f"{i + 1:02d}_柜体透明{t}.png")
+                C.contact_sheet(V).save(outdir / f"{i + 1:02d}_透明度对比.jpg", quality=90)
+                final = V[trans[0]]
+                rec["透明度版本"] = [f"{i + 1:02d}_柜体透明{t}.png" for t in V]
+            else:
+                final = C.paste_back(gen, layer)
             final.save(outdir / f"{i + 1:02d}_final.png")
             ok, bad, n = C.verify(final, layer)
             rec.update(raw=raw.name, final=f"{i + 1:02d}_final.png", raw_size=gen.size,
@@ -137,6 +152,8 @@ def main(argv=None):
     sc.add_argument("--random", type=int, metavar="SEED")
     sc.add_argument("--pick")
     sc.add_argument("--seed", type=int)
+    sc.add_argument("--front-quad", help="正面四角标注 JSON：{\"front_quad\": [[x,y]×4]}，坐标为抠图后产品图坐标；给出后侧面交给柜体遮挡")
+    sc.add_argument("--transparency", default="0,30,50,70", help="柜体透明度（百分比），逗号分隔")
     c = sub.add_parser("check", help="检查内容 JSON（替换最终内容后先跑）")
     c.add_argument("content", nargs="+", help="一个或多个内容 JSON")
     c.add_argument("--image", nargs="+", help="产品参考图，检查是否存在、数量是否超限")

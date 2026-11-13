@@ -89,3 +89,89 @@ def aspect(layer):
     """产品在画面中的宽高比（用不透明外框计算），用于和规格比例核对。"""
     x0, y0, x1, y1 = layer.getchannel("A").point(lambda v: 255 if v > 128 else 0).getbbox()
     return (x1 - x0) / (y1 - y0)
+
+
+# ---------------- 斜侧角度：正面 / 侧面分离，柜体遮挡与透明度 ----------------
+
+def face_mask(product, front_quad):
+    """front_quad：冰箱正面四个角在【抠图后产品图】坐标系中的位置 [(x,y)×4]，按顺时针。
+    返回 (正面遮罩, 侧面+顶面遮罩)，都是 L 模式。"""
+    from PIL import ImageDraw
+    alpha = product.getchannel("A")
+    front = Image.new("L", product.size, 0)
+    ImageDraw.Draw(front).polygon([tuple(p) for p in front_quad], fill=255)
+    front = ImageChops.multiply(front, alpha)
+    side = ImageChops.subtract(alpha, front)
+    return front, side
+
+
+def place_faces(product, front_quad, height_frac=0.62, center_x=0.38, bottom_y=0.92, canvas=CANVAS, fill=FILL):
+    """和 place() 一样摆放产品，但画布上只显示冰箱正面，侧面和顶面涂成灰色（交给模型画柜体）。
+    返回 (画布, 正面图层, 侧面图层, 外框)。"""
+    front_m, side_m = face_mask(product, front_quad)
+    W, H = canvas
+    ph = int(H * height_frac)
+    pw = int(product.width * ph / product.height)
+    x0, y0 = int(W * center_x - pw / 2), int(H * bottom_y - ph)
+
+    def layer_of(mask):
+        p = product.copy()
+        p.putalpha(mask)
+        p = p.resize((pw, ph), Image.LANCZOS)
+        L = Image.new("RGBA", canvas, (0, 0, 0, 0))
+        L.alpha_composite(p, (x0, y0))
+        return L
+
+    front_l, side_l = layer_of(front_m), layer_of(side_m)
+    base = Image.new("RGBA", canvas, fill + (255,))
+    base.alpha_composite(front_l)
+    return base.convert("RGB"), front_l, side_l, (x0, y0, x0 + pw, y0 + ph)
+
+
+def cabinet_variants(generated, front_l, side_l, transparencies=(0, 30, 50, 70)):
+    """由一张模型出图得到不同柜体透明度的版本。
+    transparency=0：柜体不透明，冰箱侧面完全被挡住；
+    transparency=70：柜体 70% 透明，冰箱侧面以 70% 的强度透出来。
+    正面始终是原图。返回 {透明度: 图}。"""
+    gen = generated.convert("RGBA")
+    if gen.size != front_l.size:
+        gen = gen.resize(front_l.size, Image.LANCZOS)
+    out = {}
+    for t in transparencies:
+        img = gen.copy()
+        if t:
+            side = side_l.copy()
+            side.putalpha(side_l.getchannel("A").point(lambda v, k=t / 100: int(v * k)))
+            img.alpha_composite(side)
+        img.alpha_composite(front_l)
+        out[t] = img.convert("RGB")
+    return out
+
+
+def contact_sheet(variants, width=600, label=True):
+    """把不同透明度的版本横排拼成一张对比图。"""
+    from PIL import ImageDraw
+    items = list(variants.items())
+    w = width
+    h = int(items[0][1].height * w / items[0][1].width)
+    sheet = Image.new("RGB", (w * len(items), h + (40 if label else 0)), (255, 255, 255))
+    for i, (t, im) in enumerate(items):
+        sheet.paste(im.resize((w, h), Image.LANCZOS), (i * w, 0))
+        if label:
+            ImageDraw.Draw(sheet).text((i * w + 10, h + 8), "柜体不透明" if t == 0 else f"柜体透明 {t}%",
+                                       fill=(0, 0, 0), font=_font(24))
+    return sheet
+
+
+def _font(size):
+    """优先用系统里能显示中文的字体，找不到就用默认字体。"""
+    from PIL import ImageFont
+    import glob
+    for pat in ("/usr/share/fonts/**/*CJK*", "/usr/share/fonts/**/*unifont.otf", "/System/Library/Fonts/PingFang*",
+                "C:/Windows/Fonts/msyh*"):
+        for f in glob.glob(pat, recursive=True):
+            try:
+                return ImageFont.truetype(f, size)
+            except OSError:
+                continue
+    return ImageFont.load_default()
