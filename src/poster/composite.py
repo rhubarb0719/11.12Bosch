@@ -101,6 +101,19 @@ def aspect(layer):
 
 # ---------------- 斜侧角度：正面 / 侧面分离，柜体遮挡与透明度 ----------------
 
+def hide_mask(product, hide_polys):
+    """hide_polys：要被柜体遮挡的区域（侧面、顶面、支脚），抠图坐标的多边形列表。
+    返回 (保留遮罩, 遮挡遮罩)。适合开门图：伸出正面之外的门板也会完整保留。"""
+    from PIL import ImageDraw
+    alpha = product.getchannel("A")
+    hide = Image.new("L", product.size, 0)
+    d = ImageDraw.Draw(hide)
+    for poly in hide_polys:
+        d.polygon([tuple(p) for p in poly], fill=255)
+    hide = ImageChops.multiply(hide, alpha)
+    return ImageChops.subtract(alpha, hide), hide
+
+
 def face_mask(product, front_quad):
     """front_quad：冰箱正面四个角在【抠图后产品图】坐标系中的位置 [(x,y)×4]，按顺时针。
     返回 (正面遮罩, 侧面+顶面遮罩)，都是 L 模式。"""
@@ -116,7 +129,10 @@ def face_mask(product, front_quad):
 def place_faces(product, front_quad, height_frac=0.62, center_x=0.38, bottom_y=0.92, canvas=CANVAS, fill=FILL):
     """和 place() 一样摆放产品，但画布上只显示冰箱正面，侧面和顶面涂成灰色（交给模型画柜体）。
     返回 (画布, 正面图层, 侧面图层, 外框)。"""
-    front_m, side_m = face_mask(product, front_quad)
+    if isinstance(front_quad, dict):          # {"hide_polys": [...]}
+        front_m, side_m = hide_mask(product, front_quad["hide_polys"])
+    else:
+        front_m, side_m = face_mask(product, front_quad)
     W, H = canvas
     ph = int(H * height_frac)
     pw = int(product.width * ph / product.height)

@@ -81,9 +81,13 @@ def run_scene(a):
     outdir = ROOT / "output" / ("scene-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
     outdir.mkdir(parents=True)
     prod = C.cutout(a.product)
-    quad = json.loads(Path(a.front_quad).read_text(encoding="utf-8"))["front_quad"] if a.front_quad else None
-    if quad:
-        quad = C.quad_to_cutout(quad, prod)      # 标注用原图坐标，换算到抠图坐标
+    quad = None
+    if a.front_quad:                         # 标注文件：front_quad（正面四角）或 hide_polys（遮挡区域），原图坐标
+        ann = json.loads(Path(a.front_quad).read_text(encoding="utf-8"))
+        if "hide_polys" in ann:
+            quad = {"hide_polys": [C.quad_to_cutout(p, prod) for p in ann["hide_polys"]]}
+        else:
+            quad = C.quad_to_cutout(ann["front_quad"], prod)
     if quad:
         canvas, layer, side_l, box = C.place_faces(prod, quad, a.height, a.x, a.bottom)
         trans = [int(t) for t in a.transparency.split(",")]
@@ -154,7 +158,7 @@ def main(argv=None):
     sc.add_argument("--random", type=int, metavar="SEED")
     sc.add_argument("--pick")
     sc.add_argument("--seed", type=int)
-    sc.add_argument("--front-quad", help="正面四角标注 JSON：{\"front_quad\": [[x,y]×4]}，坐标为抠图后产品图坐标；给出后侧面交给柜体遮挡")
+    sc.add_argument("--front-quad", "--annotation", dest="front_quad", help="正面四角标注 JSON：{\"front_quad\": [[x,y]×4]}，坐标为抠图后产品图坐标；给出后侧面交给柜体遮挡")
     sc.add_argument("--transparency", default="0,30,50,70", help="柜体透明度（百分比），逗号分隔")
     c = sub.add_parser("check", help="检查内容 JSON（替换最终内容后先跑）")
     c.add_argument("content", nargs="+", help="一个或多个内容 JSON")
