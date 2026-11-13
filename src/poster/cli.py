@@ -83,6 +83,8 @@ def run_scene(a):
     prod = C.cutout(a.product)
     quad = json.loads(Path(a.front_quad).read_text(encoding="utf-8"))["front_quad"] if a.front_quad else None
     if quad:
+        quad = C.quad_to_cutout(quad, prod)      # 标注用原图坐标，换算到抠图坐标
+    if quad:
         canvas, layer, side_l, box = C.place_faces(prod, quad, a.height, a.x, a.bottom)
         trans = [int(t) for t in a.transparency.split(",")]
     else:

@@ -27,7 +27,15 @@ def cutout(path, threshold=12, feather=1):
     rgba = im.convert("RGBA")
     rgba.putalpha(mask)
     box = mask.point(lambda v: 255 if v > 128 else 0).getbbox()
-    return rgba.crop(box)
+    out = rgba.crop(box)
+    out.info["crop_box"] = box          # 抠图在原图中的位置，用于把原图坐标换算到抠图坐标
+    return out
+
+
+def quad_to_cutout(quad, product):
+    """原图坐标的四角 → 抠图坐标。"""
+    x0, y0 = product.info.get("crop_box", (0, 0, 0, 0))[:2]
+    return [(x - x0, y - y0) for x, y in quad]
 
 
 def _border_connected(near_white):
