@@ -371,13 +371,17 @@ def warp_front(product_img, src_quad, scene, dst_quad, feather=0.8, shade=0.0, s
     mask = Image.new("L", scene.size, 0)
     ImageDraw.Draw(mask).polygon([tuple(p) for p in dst_quad], fill=255)
     if shade:
-        m = np.asarray(mask) > 0                                     # 只用冰箱范围内的亮度，避免把旁边深色柜体糊进来
-        L = np.asarray(scene.convert("L"), float) * m
-        num = np.asarray(Image.fromarray(L.astype("uint8")).filter(ImageFilter.GaussianBlur(shade_blur)), float)
-        den = np.asarray(mask.filter(ImageFilter.GaussianBlur(shade_blur)), float) / 255
-        lum = num / np.maximum(den, 1e-3)
-        ratio = lum / np.percentile(lum[m], 90)                      # 以较亮处为基准，只压暗不提亮
-        ratio = 1 + (np.clip(ratio, 0.75, 1.0) - 1) * shade
+        # 光线融合：把场景里模型原本给冰箱画的明暗（低频亮度）转移到产品图冰箱上。
+        # 只转移亮度、不改色相；用冰箱范围内的像素做模糊，避免把旁边柜体糊进来。
+        m = np.asarray(mask, float) / 255
+        den = np.maximum(np.asarray(mask.filter(ImageFilter.GaussianBlur(shade_blur)), float) / 255, 1e-3)
+
+        def low(img):
+            L = np.asarray(img.convert("L"), float) * m
+            return np.asarray(Image.fromarray(L.astype("uint8")).filter(ImageFilter.GaussianBlur(shade_blur)), float) / den
+
+        ratio = np.clip(low(scene) / np.maximum(low(warped), 1), 0.55, 1.1)
+        ratio = 1 + (ratio - 1) * shade
         w = np.asarray(warped, float) * ratio[..., None]
         warped = Image.fromarray(np.clip(w, 0, 255).astype("uint8"))
     if feather:
@@ -386,3 +390,62 @@ def warp_front(product_img, src_quad, scene, dst_quad, feather=0.8, shade=0.0, s
     layer = warped.convert("RGBA")
     layer.putalpha(mask)
     return out, layer
+
+
+def find_white_quad(img, min_v=150, max_sat=28):
+    """在场景图里找模型画的白色冰箱正面，返回四角 [左上, 右上, 右下, 左下]（冰箱左右边为竖直线）。
+    做法：取低饱和的亮色像素里最大的一块，左右边取列范围，上下边各拟合一条直线。"""
+    import numpy as np
+    s = 4
+    a = np.asarray(img.convert("RGB").resize((img.width // s, img.height // s)), int)
+    mx, mn = a.max(-1), a.min(-1)
+    m = (mn > min_v) & (mx - mn < max_sat)
+    lab = Image.fromarray((m * 255).astype("uint8")).filter(ImageFilter.MaxFilter(11)).filter(ImageFilter.MinFilter(11))  # 闭运算：跨过门缝和把手
+    m = np.asarray(lab) > 0
+    best, seen = None, np.zeros_like(m)
+    from PIL import ImageDraw
+    ys, xs = np.nonzero(m)
+    for i in range(0, len(xs), max(1, len(xs) // 400)):          # 抽样种子做连通域
+        x, y = int(xs[i]), int(ys[i])
+        if seen[y, x]:
+            continue
+        w = lab.copy()
+        ImageDraw.floodfill(w, (x, y), 128)
+        comp = np.asarray(w) == 128
+        seen |= comp
+        if best is None or comp.sum() > best.sum():
+            best = comp
+    cols = np.nonzero(best.sum(0) > best.shape[0] * 0.15)[0]
+    x0, x1 = cols.min(), cols.max()
+    xs_fit = np.arange(x0 + 3, x1 - 2)
+    top = np.array([np.nonzero(best[:, x])[0].min() for x in xs_fit])
+    bot = np.array([np.nonzero(best[:, x])[0].max() for x in xs_fit])
+
+    def line(yv):
+        k, b = np.polyfit(xs_fit, yv, 1)
+        r = yv - (k * xs_fit + b)
+        keep = np.abs(r) < max(2, 2 * r.std())                     # 去掉把手、铭牌造成的离群点后再拟合一次
+        return np.polyfit(xs_fit[keep], yv[keep], 1)
+
+    (kt, bt), (kb, bb) = line(top), line(bot)
+    X0, X1 = x0 * s, (x1 + 1) * s
+    return [(X0, (kt * x0 + bt) * s), (X1, (kt * (x1 + 1) + bt) * s), (X1, (kb * (x1 + 1) + bb + 1) * s), (X0, (kb * x0 + bb + 1) * s)]
+
+
+def clear_under(scene, quad, band=0.035, shadow=0.45):
+    """去掉模型在冰箱门底边下方画的支脚：用更下方的地面像素向上覆盖这条带，再在门底边下压一条柔和的贴地阴影，
+    让冰箱和相邻落地柜门一样直接收到地面。band 为带高占冰箱高度的比例。"""
+    import numpy as np
+    a = np.asarray(scene.convert("RGB")).astype(float)
+    (x0, yl), (x1, yr) = quad[3], quad[2]
+    h = int(band * (quad[3][1] - quad[0][1]))
+    k = (yr - yl) / (x1 - x0)
+    H = a.shape[0]
+    for x in range(int(x0) - 6, int(x1) + 4):
+        yb = int(round(yl + k * (x - x0)))
+        for y in range(yb - 1, min(yb + h, H - h - 3)):
+            a[y, x] = a[min(y + h + 2, H - 1), x]
+        for d in range(0, 9):                                  # 贴地阴影：紧贴门底最暗，向下渐淡
+            if yb + d < H:
+                a[yb + d, x] *= 1 - shadow * (1 - d / 9) ** 2
+    return Image.fromarray(np.clip(a, 0, 255).astype("uint8"))
