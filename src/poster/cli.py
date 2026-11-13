@@ -71,10 +71,72 @@ def run_one(client, style, content, idx, a, i, outdir, images):
     return rec
 
 
+def run_scene(a):
+    """场景底图：产品像素 100% 来自原图。"""
+    import io
+    from PIL import Image
+    from . import composite as C
+    key = os.environ.get("CR_API_KEY") or sys.exit("请设置环境变量 CR_API_KEY")
+    style = P.load_style(a.style)
+    outdir = ROOT / "output" / ("scene-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
+    outdir.mkdir(parents=True)
+    prod = C.cutout(a.product)
+    canvas, layer, box = C.place(prod, a.height, a.x, a.bottom)
+    canvas.save(outdir / "00_canvas.jpg", quality=92)
+    images = [_img_data_url(canvas)] + ([to_image_ref(a.ref)] if a.ref else [])
+    content = {"参考图说明": "整体家居风格和氛围参考图2，但不要照搬图2的布局。" if a.ref else ""}
+    client, recs = CRClient(key), []
+    for i in range(a.count):
+        idx = picks_for(style, a, i)
+        seed = (a.seed + i) if a.seed is not None else random.randint(0, 2147483647)
+        body = P.build_request(style, content, idx, n=1, seed=seed, images=images)
+        rec = {"no": i + 1, "picks": {c: style["options"][c][j - 1] for c, j in idx.items()}, "seed": seed,
+               "product": a.product, "ref": a.ref, "box": box, "prompt": body["prompt"]}
+        for attempt in range(4):
+            task, _ = client.submit(body, EDIT)
+            res = client.wait(task["id"])
+            if (res.get("error") or {}).get("code") != "upstream_rate_limited" or attempt == 3:
+                break
+            time.sleep(10 * (attempt + 1))
+        rec.update(task_id=task["id"], status=res.get("status"), error=res.get("error"))
+        urls = [d["url"] for d in res.get("data", []) if d.get("url")]
+        if urls:
+            raw = outdir / f"{i + 1:02d}_raw.png"
+            client.download(urls[0], raw)
+            gen = Image.open(raw)
+            final = C.paste_back(gen, layer)
+            final.save(outdir / f"{i + 1:02d}_final.png")
+            ok, bad, n = C.verify(final, layer)
+            rec.update(raw=raw.name, final=f"{i + 1:02d}_final.png", raw_size=gen.size,
+                       产品像素核对={"一致": ok, "不一致像素": bad, "核对像素": n}, 画面中产品宽高比=round(C.aspect(layer), 4))
+        recs.append(rec)
+        print(f"[{i + 1}] {rec['status']}  {rec.get('产品像素核对')}  {rec.get('error') or ''}")
+    (outdir / "result.json").write_text(json.dumps(recs, ensure_ascii=False, indent=2), encoding="utf-8")
+    print("输出：", outdir)
+
+
+def _img_data_url(im):
+    import io
+    buf = io.BytesIO()
+    im.save(buf, "JPEG", quality=92)
+    return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="poster")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("styles", help="列出可用风格")
+    sc = sub.add_parser("scene", help="场景底图：产品原图摆进画布 → 千问补全环境 → 贴回原图并核对")
+    sc.add_argument("--product", required=True, help="白底产品原图（ID photo）")
+    sc.add_argument("--ref", help="家居实景参考图（作为图2，可选）")
+    sc.add_argument("--style", default="scene-base")
+    sc.add_argument("--height", type=float, default=0.62, help="产品高度占画面高度")
+    sc.add_argument("--x", type=float, default=0.38, help="产品中心横向位置（0–1）")
+    sc.add_argument("--bottom", type=float, default=0.92, help="产品底边纵向位置（0–1）")
+    sc.add_argument("--count", type=int, default=1)
+    sc.add_argument("--random", type=int, metavar="SEED")
+    sc.add_argument("--pick")
+    sc.add_argument("--seed", type=int)
     c = sub.add_parser("check", help="检查内容 JSON（替换最终内容后先跑）")
     c.add_argument("content", nargs="+", help="一个或多个内容 JSON")
     c.add_argument("--image", nargs="+", help="产品参考图，检查是否存在、数量是否超限")
@@ -97,6 +159,9 @@ def main(argv=None):
             st = P.load_style(sid)
             print(f"{sid}\t{st['name']}\t{st.get('status', '')}")
         return
+
+    if a.cmd == "scene":
+        return run_scene(a)
 
     if a.cmd == "check":
         from .check import check_content
