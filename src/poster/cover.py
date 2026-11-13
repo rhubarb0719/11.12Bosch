@@ -12,7 +12,7 @@ import random
 from PIL import Image, ImageDraw, ImageFilter, ImageOps
 
 W, H = 1728, 2304
-SERIF_B = "/usr/share/fonts/opentype/noto/NotoSerifCJK-Bold.ttc"
+SERIF_B = "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"   # 标题也用非衬线（思源黑体 Bold）
 SANS_M = "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"
 SANS_R = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
 INK = (58, 46, 36)          # 深棕文字
@@ -234,9 +234,22 @@ def circle_mask(size):
     return m
 
 
-def type2(main, main_quad, extras, c):
-    """主场景冰箱局部切成拱形贴片居中，其他场景切成圆形贴片环绕，配标题与卖点。
-    extras: [(scene, quad, 标签), ...]，最多 3 个。"""
+def sticker(rgba, outline=14):
+    """抠好的人物 → 白边贴纸。"""
+    pad = outline + 4
+    a = Image.new("L", (rgba.width + 2 * pad, rgba.height + 2 * pad), 0)
+    a.paste(rgba.split()[3], (pad, pad))
+    edge = a.point(lambda v: 255 if v > 60 else 0).filter(ImageFilter.MaxFilter(2 * outline + 1)).filter(ImageFilter.GaussianBlur(1.2))
+    out = Image.new("RGBA", a.size, (255, 255, 255, 0))
+    out.putalpha(edge)
+    out.alpha_composite(rgba, (pad, pad))
+    return out
+
+
+def type2(main, main_quad, extras, c, people=()):
+    """主场景冰箱局部切成拱形贴片居中，其他场景切成圆形贴片，人物做成白边贴纸站在拱形两侧，配标题与卖点。
+    extras: [(scene, quad, 标签), ...]；people: [(人物 RGBA, "left"|"right"), ...]，人物不会挡住冰箱。
+    返回 (封面, 冰箱在封面中的四角)。"""
     canvas = paper(base=(246, 242, 236)).convert("RGBA")
     d = ImageDraw.Draw(canvas)
     y = 150
@@ -251,7 +264,9 @@ def type2(main, main_quad, extras, c):
     ax, ay = (W - aw) // 2, 560
     paste_with_shadow(canvas, arch, (ax, ay), mask=arch_mask((aw, ah)))
     ImageDraw.Draw(canvas).arc([ax - 18, ay - 18, ax + aw + 18, ay + aw + 18], 180, 360, fill=ACCENT, width=4)
-    spots = [(50, 640, 420, 4), (1250, 760, 420, -5), (1250, 1330, 400, 3)]
+    fq = [(x + ax, y + ay) for x, y in map_quad(main_quad, box, (aw, ah))]
+    fx0, fx1 = min(p[0] for p in fq), max(p[0] for p in fq)
+    spots = [(40, 590, 400, 4), (1288, 590, 400, -5)] if people else [(50, 640, 420, 4), (1250, 760, 420, -5), (1250, 1330, 400, 3)]
     for (sc, q, lab), (x, yy, size, rot) in zip(extras, spots):
         b = crop_around(sc, q, 1.0, height_ratio=0.75, fx=0.5, fy=0.5)
         circ = cover_crop(sc, b, (size, size))
@@ -265,6 +280,18 @@ def type2(main, main_quad, extras, c):
             lx, ly = x + (size + 24 - lw) // 2, yy + size + 6
             d.rounded_rectangle([lx, ly, lx + lw, ly + 66], radius=33, fill=(255, 255, 255, 255))
             d.text((lx + 25, ly + 9), lab, font=f, fill=INK)
+    for person, side in people:
+        ph = 760
+        im = person.resize((round(person.width * ph / person.height), ph), Image.LANCZOS)
+        if side == "right":
+            im = ImageOps.mirror(im)                 # 朝向冰箱
+        st = sticker(im)
+        foot = ay + ah + 60
+        px = round(fx0 - 30 - st.width) if side == "left" else round(fx1 + 30)
+        px = max(px, -40) if side == "left" else min(px, W - st.width + 40)
+        assert (side == "left" and px + st.width <= fx0) or (side == "right" and px >= fx1), "人物会挡住冰箱"
+        paste_with_shadow(canvas, st, (px, foot - st.height), alpha=60, blur=18, offset=(0, 10))
+    d = ImageDraw.Draw(canvas)
     # 卖点：底部三栏
     y = 1900
     f1 = font(SERIF_B, 58)
@@ -276,7 +303,7 @@ def type2(main, main_quad, extras, c):
         if i:
             d.line([(col * i, y + 30), (col * i, y + 130)], fill=ACCENT, width=3)
     sparkle(d, W - 160, 470, 24, ACCENT); sparkle(d, 170, 520, 16, ACCENT)
-    return canvas.convert("RGB")
+    return canvas.convert("RGB"), fq
 
 
 # ---------------------------------------------------------------- 类型 3

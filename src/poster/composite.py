@@ -294,3 +294,57 @@ def niche_score(raw, quad, canvas_size, inset=20, band=14):
     vin = [p for p, a in zip(g.getdata(), inner.getdata()) if a]
     vout = [p for p, a in zip(g.getdata(), outer.getdata()) if a]
     return round(sum(vin) / len(vin), 1), round(sum(1 for p in vout if p < 70) / len(vout), 3)
+
+
+def cutout_soft_bg(path, threshold=16, feather=1.2):
+    """浅色渐变背景（影棚白/浅灰）→ RGBA 抠图。
+    用四边像素拟合一个平滑的背景渐变（x、y 的二次曲面），与背景色差小且与四边连通的区域视为背景。"""
+    import numpy as np
+    im = Image.open(path).convert("RGB")
+    a = np.asarray(im, float)
+    h, w = a.shape[:2]
+    m = 6
+    ys, xs = np.mgrid[0:h, 0:w]
+    border = np.zeros((h, w), bool)
+    border[:m] = border[-m:] = True
+    border[:, :m] = border[:, -m:] = True
+    X, Y = xs[border] / w, ys[border] / h
+    A = np.stack([np.ones_like(X), X, Y, X * X, Y * Y, X * Y], 1)
+    XX, YY = xs / w, ys / h
+    AA = np.stack([np.ones_like(XX), XX, YY, XX * XX, YY * YY, XX * YY], -1)
+    bgfit = np.stack([AA @ np.linalg.lstsq(A, a[..., c][border], rcond=None)[0] for c in range(3)], -1)
+    diff = np.abs(a - bgfit).max(-1)
+    near = Image.fromarray(np.where(diff < threshold, 255, 0).astype("uint8"))
+    bg = _border_connected(near)
+    mask = ImageChops.invert(bg)
+    mask = mask.filter(ImageFilter.MinFilter(3))           # 收掉一圈背景色残边
+    if feather:
+        mask = mask.filter(ImageFilter.GaussianBlur(feather))
+    rgba = im.convert("RGBA")
+    rgba.putalpha(mask)
+    box = mask.point(lambda v: 255 if v > 128 else 0).getbbox()
+    return rgba.crop(box)
+
+
+def chroma_key(path, key="blue", feather=0.8):
+    """蓝幕 / 绿幕抠图：alpha 由“蓝（绿）比其他两通道多多少”决定，并去除边缘溢色。"""
+    import numpy as np
+    a = np.asarray(Image.open(path).convert("RGB"), float)
+    r, g, b = a[..., 0], a[..., 1], a[..., 2]
+    if key == "blue":
+        spill = b - np.maximum(r, g)
+    else:
+        spill = g - np.maximum(r, b)
+    alpha = np.clip(1 - (spill - 25) / 70, 0, 1)            # spill<25 完全保留，>95 完全透明
+    if key == "blue":
+        a[..., 2] = np.minimum(b, np.maximum(r, g) + 10)    # 去蓝色溢边
+    else:
+        a[..., 1] = np.minimum(g, np.maximum(r, b) + 10)
+    mask = Image.fromarray((alpha * 255).astype("uint8"))
+    mask = mask.filter(ImageFilter.MinFilter(3))
+    if feather:
+        mask = mask.filter(ImageFilter.GaussianBlur(feather))
+    rgba = Image.fromarray(a.astype("uint8")).convert("RGBA")
+    rgba.putalpha(mask)
+    box = mask.point(lambda v: 255 if v > 128 else 0).getbbox()
+    return rgba.crop(box)
