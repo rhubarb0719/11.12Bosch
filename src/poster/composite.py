@@ -348,3 +348,41 @@ def chroma_key(path, key="blue", feather=0.8):
     rgba.putalpha(mask)
     box = mask.point(lambda v: 255 if v > 128 else 0).getbbox()
     return rgba.crop(box)
+
+
+def _persp_coeffs(dst_quad, src_quad):
+    """PIL 透视变换系数：输出图坐标 dst → 输入图坐标 src。"""
+    import numpy as np
+    A, B = [], []
+    for (x, y), (u, v) in zip(dst_quad, src_quad):
+        A += [[x, y, 1, 0, 0, 0, -u * x, -u * y], [0, 0, 0, x, y, 1, -v * x, -v * y]]
+        B += [u, v]
+    return np.linalg.solve(np.array(A, float), np.array(B, float)).tolist()
+
+
+def warp_front(product_img, src_quad, scene, dst_quad, feather=0.8, shade=0.0, shade_blur=45):
+    """把产品图的冰箱正面（src_quad）按透视贴到场景图里模型画的冰箱位置（dst_quad）。
+    内容（铭牌、把手、门缝、颜色）全部来自产品图；shade>0 时叠加场景里原有的明暗（0–1 为强度）。
+    返回 (结果图, 贴上去的冰箱图层 RGBA)。"""
+    import numpy as np
+    scene = scene.convert("RGB")
+    warped = product_img.convert("RGB").transform(scene.size, Image.PERSPECTIVE, _persp_coeffs(dst_quad, src_quad), Image.BICUBIC)
+    from PIL import ImageDraw
+    mask = Image.new("L", scene.size, 0)
+    ImageDraw.Draw(mask).polygon([tuple(p) for p in dst_quad], fill=255)
+    if shade:
+        m = np.asarray(mask) > 0                                     # 只用冰箱范围内的亮度，避免把旁边深色柜体糊进来
+        L = np.asarray(scene.convert("L"), float) * m
+        num = np.asarray(Image.fromarray(L.astype("uint8")).filter(ImageFilter.GaussianBlur(shade_blur)), float)
+        den = np.asarray(mask.filter(ImageFilter.GaussianBlur(shade_blur)), float) / 255
+        lum = num / np.maximum(den, 1e-3)
+        ratio = lum / np.percentile(lum[m], 90)                      # 以较亮处为基准，只压暗不提亮
+        ratio = 1 + (np.clip(ratio, 0.75, 1.0) - 1) * shade
+        w = np.asarray(warped, float) * ratio[..., None]
+        warped = Image.fromarray(np.clip(w, 0, 255).astype("uint8"))
+    if feather:
+        mask = mask.filter(ImageFilter.GaussianBlur(feather))
+    out = Image.composite(warped, scene, mask)
+    layer = warped.convert("RGBA")
+    layer.putalpha(mask)
+    return out, layer
