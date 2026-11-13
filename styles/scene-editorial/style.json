@@ -1,0 +1,33 @@
+{
+  "id": "scene-editorial",
+  "name": "真实家庭厨房·杂志级室内摄影（英文长提示词；模型只画环境，冰箱用白底产品图原图贴入）",
+  "status": "调试中",
+  "version": "v1",
+  "params": {
+    "model": "qwen-image-3.0-pro",
+    "aspect_ratio": "3:4",
+    "quality": "2K",
+    "provider_options": {"prompt_extend": false}
+  },
+  "风格": "An interior photograph for an architecture and lifestyle magazine: a real, lived-in family kitchen with a full-height wall of built-in cabinetry in natural oak veneer. Shot on a full-frame camera with a 35mm lens at eye level, 3:4 vertical frame.",
+  "options": {
+    "光线": [
+      "Soft overcast daylight enters from a large window on the left, bright and airy, falling off gently toward the back of the room. A slim warm LED strip under the upper cabinets lights only the worktop. Neutral white balance, bright highlights without clipping, soft open shadows that keep material detail."
+    ],
+    "摆件": [
+      "On the worktop: a handmade ceramic mug, a loosely folded natural linen cloth and a small plate of fruit, arranged slightly off-centre, suggesting a tidy, considered home that someone actually lives in."
+    ]
+  },
+  "conflicts": [],
+  "默认值": {"参考图说明": "", "遮挡说明": "", "灰模说明": ""},
+  "template": [
+    "{风格}\n",
+    "Image 1 is a layout sketch. The tan blocks mark the cabinetry (tall units on both sides, upper cabinets above, plinth and floor below) and the dark quadrilateral in the middle is an empty built-in refrigerator niche. Follow the exact position, size and perspective of every block, so the whole cabinet wall shares one consistent perspective. The dark niche must stay exactly where it is, with the same shape and size, as an empty dark recess with nothing inside: no refrigerator, no doors, no objects. Do not make the niche taller, wider or deeper than drawn. Its edges sit flush with the cabinet fronts and its bottom edge meets the floor line of the cabinets. {参考图说明}\n",
+    "To the left of the niche the cabinetry opens into a small everyday coffee counter: upper cabinets, an open recess with a honed pale limestone worktop and backsplash, and base cabinets below. {摆件} Nothing overlaps the niche. Finely textured limewash wall, pale oak plank floor.\n",
+    "{光线}\n",
+    "Oak grain with natural variation, restrained stone veining, matte surfaces with subtle real-world imperfections. Natural architectural perspective with straight verticals, no ultra-wide distortion. Crisp but not over-sharpened, very fine film grain that does not hide detail. Not a 3D render, no plastic look, no heavy HDR, no repeating textures.\n",
+    "No text, letters, numbers, logos, arrows, labels or watermarks anywhere."
+  ],
+  "文字约束": "",
+  "negative_prompt": "text, letters, logo, watermark, arrows, refrigerator inside the niche, niche filled, niche shifted, enlarged niche, wrong perspective, leftover flat color blocks, people, 3D render, CGI, plastic look, heavy HDR, oversharpened, low resolution"
+}
