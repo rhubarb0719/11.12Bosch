@@ -81,21 +81,34 @@ def run_scene(a):
     outdir = ROOT / "output" / ("scene-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
     outdir.mkdir(parents=True)
     prod = C.cutout(a.product)
-    quad = None
+    quad, ann = None, {}
     if a.front_quad:                         # 标注文件：front_quad（正面四角）或 hide_polys（遮挡区域），原图坐标
         ann = json.loads(Path(a.front_quad).read_text(encoding="utf-8"))
         if "hide_polys" in ann:
             quad = {"hide_polys": [C.quad_to_cutout(p, prod) for p in ann["hide_polys"]]}
         else:
             quad = C.quad_to_cutout(ann["front_quad"], prod)
+    guide_quad = None
+    if a.front_quad and "front_quad" in ann:
+        guide_quad = C.quad_to_cutout(ann["front_quad"], prod)
     if quad:
         canvas, layer, side_l, box = C.place_faces(prod, quad, a.height, a.x, a.bottom)
         trans = [int(t) for t in a.transparency.split(",")]
+        if guide_quad and a.guide:
+            gq = C.quad_to_canvas(guide_quad, prod, box)
+            g = C.draw_guide(canvas, gq, tone=a.guide_tone)
+            if a.niche:                      # 空柜洞：画布上不放冰箱
+                canvas = C.niche_canvas(g, gq)
+            else:
+                g = g.convert("RGBA")
+                g.alpha_composite(layer)
+                canvas = g.convert("RGB")
     else:
         canvas, layer, box = C.place(prod, a.height, a.x, a.bottom)
     canvas.save(outdir / "00_canvas.jpg", quality=92)
     images = [_img_data_url(canvas)] + ([to_image_ref(a.ref)] if a.ref else [])
     content = {"参考图说明": "整体家居风格和氛围参考图2，但不要照搬图2的布局。" if a.ref else "",
+               "灰模说明": "冰箱左侧那列高柜要把冰箱的侧面完全挡住。" if (quad and a.guide) else "",
                "遮挡说明": ("冰箱只露出正面，冰箱的侧面和顶面位置也是灰色，请在那里画出相邻高柜的柜体和上方吊柜，"
                          "把冰箱的侧面和顶面完全挡住，柜体正面与冰箱正面齐平。") if quad else ""}
     client, recs = CRClient(key), []
@@ -117,6 +130,14 @@ def run_scene(a):
             raw = outdir / f"{i + 1:02d}_raw.png"
             client.download(urls[0], raw)
             gen = Image.open(raw)
+            if a.niche and guide_quad and a.guide:
+                inner, dark_out = C.niche_score(gen, gq, layer.size)
+                passed = inner <= 95 and dark_out <= 0.25
+                rec["对齐检测"] = {"柜洞内亮度": inner, "外圈深色比例": dark_out, "合格": passed}
+            else:
+                diff, corr = C.align_score(gen, layer)
+                passed = diff <= a.max_diff and corr >= a.min_corr
+                rec["对齐检测"] = {"平均亮度差": diff, "边缘相关": corr, "合格": passed}
             if quad:
                 V = C.cabinet_variants(gen, layer, side_l, trans)
                 for t, im in V.items():
@@ -131,7 +152,7 @@ def run_scene(a):
             rec.update(raw=raw.name, final=f"{i + 1:02d}_final.png", raw_size=gen.size,
                        产品像素核对={"一致": ok, "不一致像素": bad, "核对像素": n}, 画面中产品宽高比=round(C.aspect(layer), 4))
         recs.append(rec)
-        print(f"[{i + 1}] {rec['status']}  {rec.get('产品像素核对')}  {rec.get('error') or ''}")
+        print(f"[{i + 1}] {rec['status']}  对齐 {rec.get('对齐检测')}  产品 {rec.get('产品像素核对')}  {rec.get('error') or ''}")
     (outdir / "result.json").write_text(json.dumps(recs, ensure_ascii=False, indent=2), encoding="utf-8")
     print("输出：", outdir)
 
@@ -159,6 +180,11 @@ def main(argv=None):
     sc.add_argument("--pick")
     sc.add_argument("--seed", type=int)
     sc.add_argument("--front-quad", "--annotation", dest="front_quad", help="正面四角标注 JSON：{\"front_quad\": [[x,y]×4]}，坐标为抠图后产品图坐标；给出后侧面交给柜体遮挡")
+    sc.add_argument("--no-guide", dest="guide", action="store_false", help="不画橱柜灰模")
+    sc.add_argument("--guide-tone", default="wood", choices=["wood", "gray"], help="灰模柜体颜色：wood 浅木色 / gray 灰色")
+    sc.add_argument("--niche", action="store_true", help="空柜洞方案：画布不放冰箱，模型只画环境（配合 --style scene-niche）")
+    sc.add_argument("--max-diff", type=float, default=15, help="对齐检测：平均亮度差上限")
+    sc.add_argument("--min-corr", type=float, default=0.45, help="对齐检测：边缘相关系数下限")
     sc.add_argument("--transparency", default="0,30,50,70", help="柜体透明度（百分比），逗号分隔")
     c = sub.add_parser("check", help="检查内容 JSON（替换最终内容后先跑）")
     c.add_argument("content", nargs="+", help="一个或多个内容 JSON")

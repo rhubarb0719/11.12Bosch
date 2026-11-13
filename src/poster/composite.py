@@ -199,3 +199,98 @@ def _font(size):
             except OSError:
                 continue
     return ImageFont.load_default()
+
+
+# ---------------- 透视灰模 + 对齐检测 ----------------
+
+def quad_to_canvas(quad, product, box):
+    """抠图坐标的正面四角 → 画布坐标。box 为 place/place_faces 返回的产品外框。"""
+    x0, y0, x1, y1 = box
+    sx, sy = (x1 - x0) / product.width, (y1 - y0) / product.height
+    return [(x0 + x * sx, y0 + y * sy) for x, y in quad]
+
+
+def draw_guide(canvas, quad, cab_mm=600, fridge_mm=892, tone="gray"):
+    """在画布上画橱柜灰模：左右高柜、上方吊柜、踢脚板、地面，透视沿冰箱正面四条边延伸。
+    quad：画布坐标的冰箱正面四角（左上、右上、右下、左下）。返回新画布。"""
+    from PIL import ImageDraw
+    img = canvas.copy()
+    d = ImageDraw.Draw(img)
+    W, H = img.size
+    (tlx, tly), (trx, try_), (brx, bry), (blx, bly) = quad
+    mt = (try_ - tly) / (trx - tlx)
+    mb = (bry - bly) / (brx - blx)
+    yt = lambda x: tly + mt * (x - tlx)
+    yb = lambda x: bly + mb * (x - blx)
+    c = (trx - tlx) * cab_mm / fridge_mm
+    xl, xr = max(0, tlx - 1.4 * c), min(W, trx + 1.2 * c)
+    up = lambda x: yt(x) - 0.24 * (yb(x) - yt(x))
+    pl = lambda x: yb(x) + 0.05 * (yb(x) - yt(x))
+    # 地面
+    d.polygon([(0, pl(0)), (W, pl(W)), (W, H), (0, H)], fill=(168, 160, 150))
+    # 踢脚板
+    d.polygon([(xl, yb(xl)), (xr, yb(xr)), (xr, pl(xr)), (xl, pl(xl))], fill=(95, 92, 88))
+    # 左右高柜正面（与冰箱正面同一平面）
+    cab = (176, 172, 166) if tone == "gray" else (214, 190, 156)
+    d.polygon([(xl, yt(xl)), (tlx, tly), (blx, bly), (xl, yb(xl))], fill=cab)
+    d.polygon([(trx, try_), (xr, yt(xr)), (xr, yb(xr)), (brx, bry)], fill=cab)
+    # 吊柜
+    d.polygon([(xl, up(xl)), (xr, up(xr)), (xr, yt(xr)), (xl, yt(xl))], fill=(184, 180, 174) if tone == "gray" else (220, 197, 164))
+    # 柜门缝
+    seam = (120, 116, 110)
+    for x in (xl + (tlx - xl) / 2, tlx, trx, trx + (xr - trx) / 2):
+        d.line([(x, up(x)), (x, yb(x))], fill=seam, width=3)
+    d.line([(xl, yt(xl)), (xr, yt(xr))], fill=seam, width=3)
+    return img
+
+
+def align_score(raw, layer, erode=6):
+    """模型原始出图里的冰箱与原图冰箱是否重合。返回 (平均亮度差, 边缘相关系数)。
+    平均差越小、相关系数越接近 1 越好。"""
+    import math
+    alpha = layer.getchannel("A").point(lambda v: 255 if v == 255 else 0).filter(ImageFilter.MinFilter(erode * 2 + 1))
+    g = raw.convert("L").resize(layer.size)
+    o = layer.convert("RGB").convert("L")
+    diff = ImageChops.difference(g, o)
+    m = [d for d, a in zip(diff.getdata(), alpha.getdata()) if a]
+    mean_diff = sum(m) / max(1, len(m))
+    eg = g.filter(ImageFilter.FIND_EDGES)
+    eo = o.filter(ImageFilter.FIND_EDGES)
+    xs = [(p, q) for p, q, a in zip(eg.getdata(), eo.getdata(), alpha.getdata()) if a]
+    n = len(xs)
+    mx, my = sum(p for p, _ in xs) / n, sum(q for _, q in xs) / n
+    cov = sum((p - mx) * (q - my) for p, q in xs)
+    vx = math.sqrt(sum((p - mx) ** 2 for p, _ in xs))
+    vy = math.sqrt(sum((q - my) ** 2 for _, q in xs))
+    return round(mean_diff, 2), round(cov / (vx * vy) if vx and vy else 0, 3)
+
+
+# ---------------- 空柜洞方案：画布不放冰箱，模型只画环境 ----------------
+
+def niche_canvas(guide_img, quad, inset=8, color=(48, 46, 44)):
+    """在灰模画布上把冰箱正面位置画成深色空柜洞（向内收 inset 像素，保证贴回的冰箱能盖住柜洞边缘）。"""
+    from PIL import ImageDraw
+    img = guide_img.copy()
+    cx = sum(x for x, _ in quad) / 4
+    cy = sum(y for _, y in quad) / 4
+    q = [(x + (inset if x < cx else -inset), y + (inset if y < cy else -inset)) for x, y in quad]
+    ImageDraw.Draw(img).polygon(q, fill=color)
+    return img
+
+
+def niche_score(raw, quad, canvas_size, inset=20, band=14):
+    """检查模型出图里的柜洞：冰箱位置内部应保持深色（空洞），冰箱外侧一圈不应该是深色（柜洞没有比冰箱大）。
+    返回 (柜洞内平均亮度, 外圈深色比例)。"""
+    from PIL import ImageDraw
+    g = raw.convert("L").resize(canvas_size)
+    cx = sum(x for x, _ in quad) / 4
+    cy = sum(y for _, y in quad) / 4
+    shrink = lambda k: [(x + (k if x < cx else -k), y + (k if y < cy else -k)) for x, y in quad]
+    inner = Image.new("L", canvas_size, 0)
+    ImageDraw.Draw(inner).polygon(shrink(inset), fill=255)
+    outer = Image.new("L", canvas_size, 0)
+    ImageDraw.Draw(outer).polygon(shrink(-band), fill=255)
+    ImageDraw.Draw(outer).polygon(shrink(0), fill=0)
+    vin = [p for p, a in zip(g.getdata(), inner.getdata()) if a]
+    vout = [p for p, a in zip(g.getdata(), outer.getdata()) if a]
+    return round(sum(vin) / len(vin), 1), round(sum(1 for p in vout if p < 70) / len(vout), 3)
