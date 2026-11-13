@@ -76,3 +76,44 @@ def refine_quad(img, quad, search=40):
     by = lambda x: best_y(int(x), bly + (bry - bly) * (x - blx) / (brx - blx))
     i = 3                                              # 往内收几像素，避开边缘反光线
     return [(lx + i, ty(lx + 10) + i), (rx - i, ty(rx - 10) + i), (rx - i, by(rx - 10) - i), (lx + i, by(lx + 10) - i)]
+
+
+def align_original(generated, orig, box, coarse=None):
+    """模型重画中间区域时常有整体偏移/缩放（约 1–2%、十几像素）。
+    搜索 (scale, dx, dy)，使原图按此等比缩放+平移后与模型出图最吻合。返回 (scale, dx, dy, 误差, 不变换误差)。"""
+    import numpy as np
+    gen = np.asarray(generated.convert("L").resize(CANVAS, Image.LANCZOS), float)
+    w, h = box[2] - box[0], box[3] - box[1]
+    ref = np.asarray(orig.convert("L").resize((w, h), Image.LANCZOS), float)
+    cx, cy = box[0] + w / 2, box[1] + h / 2
+    ys, xs = np.arange(80, h - 80, 5), np.arange(80, w - 80, 5)
+
+    def err(sc, dx, dy):
+        Y = (cy + (ys + box[1] - cy) * sc + dy).round().astype(int).clip(0, CANVAS[1] - 1)
+        X = (cx + (xs + box[0] - cx) * sc + dx).round().astype(int).clip(0, CANVAS[0] - 1)
+        return np.abs(gen[np.ix_(Y, X)] - ref[np.ix_(ys, xs)]).mean()
+
+    best = min((err(sc, dx, dy), sc, dx, dy) for sc in np.arange(0.97, 1.0301, 0.005)
+               for dx in range(-30, 31, 2) for dy in range(-30, 31, 2))
+    _, s0, x0, y0 = best
+    best = min((err(sc, dx, dy), sc, dx, dy) for sc in np.arange(s0 - 0.004, s0 + 0.0041, 0.001)
+               for dx in range(x0 - 2, x0 + 3) for dy in range(y0 - 2, y0 + 3))
+    return round(float(best[1]), 4), best[2], best[3], round(float(best[0]), 2), round(float(err(1.0, 0, 0)), 2)
+
+
+def blend_original(generated, orig, box, scale=1.0, dx=0, dy=0, feather=60):
+    """原图按 (scale, dx, dy) 等比缩放对齐到模型出图上，上下边缘 feather 像素渐变融合。
+    返回 (结果图, 原图实际所在框, 100% 原图区域的 y 范围)。"""
+    out = generated.convert("RGB").resize(CANVAS, Image.LANCZOS)
+    w, h = box[2] - box[0], box[3] - box[1]
+    cx, cy = box[0] + w / 2, box[1] + h / 2
+    nw, nh = round(w * scale), round(h * scale)
+    x0, y0 = round(cx - nw / 2 + dx), round(cy - nh / 2 + dy)
+    layer = Image.new("RGB", CANVAS)
+    layer.paste(orig.convert("RGB").resize((nw, nh), Image.LANCZOS), (x0, y0))
+    mask = Image.new("L", CANVAS, 0)
+    ImageDraw.Draw(mask).rectangle([max(x0, 0) + 12 if x0 > 0 else -50, y0 + feather,
+                                    x0 + nw - 12 if x0 + nw < CANVAS[0] else CANVAS[0] + 50, y0 + nh - feather], fill=255)
+    mask = mask.filter(ImageFilter.GaussianBlur(feather / 2.5))
+    solid = (y0 + 2 * feather, y0 + nh - 2 * feather)
+    return Image.composite(layer, out, mask), (x0, y0, x0 + nw, y0 + nh), solid
