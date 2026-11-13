@@ -210,9 +210,11 @@ def quad_to_canvas(quad, product, box):
     return [(x0 + x * sx, y0 + y * sy) for x, y in quad]
 
 
-def draw_guide(canvas, quad, cab_mm=600, fridge_mm=892, tone="gray"):
+def draw_guide(canvas, quad, cab_mm=600, fridge_mm=892, tone="gray", waist=None, left=1.4, right=1.2):
     """在画布上画橱柜灰模：左右高柜、上方吊柜、踢脚板、地面，透视沿冰箱正面四条边延伸。
-    quad：画布坐标的冰箱正面四角（左上、右上、右下、左下）。返回新画布。"""
+    quad：画布坐标的冰箱正面四角（左上、右上、右下、左下）。返回新画布。
+    三缝对齐：顶线（柜门顶 = 冰箱顶边）、腰线（waist：上下门分缝在冰箱高度上的比例，给出后两侧柜门在同一高度分缝）、
+    底线（柜门底 = 冰箱门底边，下方一条连续踢脚板，冰箱下方也有）。left/right：两侧柜体宽度（以 600mm 柜宽为单位）。"""
     from PIL import ImageDraw
     img = canvas.copy()
     d = ImageDraw.Draw(img)
@@ -223,7 +225,7 @@ def draw_guide(canvas, quad, cab_mm=600, fridge_mm=892, tone="gray"):
     yt = lambda x: tly + mt * (x - tlx)
     yb = lambda x: bly + mb * (x - blx)
     c = (trx - tlx) * cab_mm / fridge_mm
-    xl, xr = max(0, tlx - 1.4 * c), min(W, trx + 1.2 * c)
+    xl, xr = max(0, tlx - left * c), min(W, trx + right * c)
     up = lambda x: yt(x) - 0.24 * (yb(x) - yt(x))
     pl = lambda x: yb(x) + 0.05 * (yb(x) - yt(x))
     # 地面
@@ -238,9 +240,20 @@ def draw_guide(canvas, quad, cab_mm=600, fridge_mm=892, tone="gray"):
     d.polygon([(xl, up(xl)), (xr, up(xr)), (xr, yt(xr)), (xl, yt(xl))], fill=(184, 180, 174) if tone == "gray" else (220, 197, 164))
     # 柜门缝
     seam = (120, 116, 110)
-    for x in (xl + (tlx - xl) / 2, tlx, trx, trx + (xr - trx) / 2):
+    xs = [tlx, trx]
+    x = tlx - c
+    while x > xl + 0.3 * c:
+        xs.append(x); x -= c
+    x = trx + c
+    while x < xr - 0.3 * c:
+        xs.append(x); x += c
+    for x in xs:
         d.line([(x, up(x)), (x, yb(x))], fill=seam, width=3)
-    d.line([(xl, yt(xl)), (xr, yt(xr))], fill=seam, width=3)
+    d.line([(xl, yt(xl)), (xr, yt(xr))], fill=seam, width=3)          # 顶线
+    d.line([(xl, yb(xl)), (xr, yb(xr))], fill=seam, width=3)          # 底线
+    if waist:                                                         # 腰线
+        yw = lambda x: yt(x) + waist * (yb(x) - yt(x))
+        d.line([(xl, yw(xl)), (xr, yw(xr))], fill=seam, width=3)
     return img
 
 
@@ -449,3 +462,39 @@ def clear_under(scene, quad, band=0.035, shadow=0.45):
             if yb + d < H:
                 a[yb + d, x] *= 1 - shadow * (1 - d / 9) ** 2
     return Image.fromarray(np.clip(a, 0, 255).astype("uint8"))
+
+
+def shade_from_surround(final, raw, quad, base=0.9, strength=1.0, band=0.5):
+    """光线融合（空柜洞方案用）：从冰箱两侧柜体的亮度变化估计这面墙上的光照分布（拟合成平面），
+    按同样的相对明暗压到冰箱上；base 为整体亮度系数。只改亮度，不改色相。"""
+    import numpy as np
+    from PIL import ImageDraw
+    L = np.asarray(raw.convert("L").resize(final.size).filter(ImageFilter.GaussianBlur(12)), float)
+    (tlx, tly), (trx, try_), (brx, bry), (blx, bly) = quad
+    w = trx - tlx
+    pts = []
+    for fx in np.linspace(-band, 1 + band, 28):
+        if -0.06 < fx < 1.06:
+            continue                                               # 只取冰箱左右两侧的柜体
+        x = tlx + fx * w
+        y0 = tly + (try_ - tly) * fx
+        y1 = bly + (bry - bly) * fx
+        for fy in np.linspace(0.06, 0.94, 18):
+            y = y0 + fy * (y1 - y0)
+            if 0 <= x < L.shape[1] and 0 <= y < L.shape[0]:
+                pts.append((x, y, L[int(y), int(x)]))
+    P = np.array(pts)
+    med = np.median(P[:, 2])
+    P = P[np.abs(P[:, 2] - med) < 0.35 * med]                       # 去掉开放格、摆件等异常点
+    A = np.c_[np.ones(len(P)), P[:, 0], P[:, 1]]
+    coef = np.linalg.lstsq(A, P[:, 2], rcond=None)[0]
+    yy, xx = np.mgrid[0:final.height, 0:final.width]
+    plane = coef[0] + coef[1] * xx + coef[2] * yy
+    mask = Image.new("L", final.size, 0)
+    ImageDraw.Draw(mask).polygon([tuple(p) for p in quad], fill=255)
+    m = np.asarray(mask) > 0
+    ratio = np.clip(plane / plane[m].max(), 0.6, 1.0)
+    ratio = base * (1 + (ratio - 1) * strength)
+    a = np.asarray(final.convert("RGB"), float)
+    a[m] = a[m] * ratio[m][:, None]
+    return Image.fromarray(np.clip(a, 0, 255).astype("uint8")), float(ratio[m].min()), float(ratio[m].max())

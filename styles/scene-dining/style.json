@@ -1,0 +1,23 @@
+{
+  "id": "scene-dining",
+  "name": "餐厨整墙柜·杂志级室内摄影（三缝对齐草稿；模型只画环境，冰箱用白底产品图原图贴入）",
+  "status": "调试中",
+  "version": "v1",
+  "params": {"model": "qwen-image-3.0-pro", "aspect_ratio": "3:4", "quality": "2K", "provider_options": {"prompt_extend": false}},
+  "风格": "An interior photograph for an architecture and lifestyle magazine: a real, lived-in dining kitchen with a full-height wall of built-in cabinetry in low-sheen oak veneer. Shot on a full-frame camera with a 40mm lens at eye level, 3:4 vertical, straight verticals.",
+  "options": {
+    "光线": ["Soft overcast daylight from the window on the right, brightest near the glass and falling off gently along the cabinet wall toward the left. Neutral white balance, soft open shadows that keep material detail."]
+  },
+  "conflicts": [],
+  "默认值": {"参考图说明": "", "遮挡说明": "", "灰模说明": ""},
+  "template": [
+    "{风格}\n",
+    "Image 1 is a layout sketch. The tan blocks mark the cabinet wall, which runs from the near left to the far right of the frame; the dark quadrilateral is an empty built-in refrigerator niche. Follow the exact position, size and perspective of every block. The dark niche must stay exactly where it is, same shape and size, as an empty dark recess with nothing inside: no refrigerator, no doors, no objects.\n",
+    "The thin lines on the sketch are the door joints and must be kept exactly: every cabinet door beside the niche has its top edge on the same line as the top of the niche, a horizontal joint on the waist line drawn across the sketch, and its bottom edge on the same line as the bottom of the niche. One continuous recessed dark toe-kick plinth of even height runs under the whole wall, including under the niche. All cabinet fronts are flat slab doors in one plane, flush with the niche edges, with thin even gaps.\n",
+    "To the right of the cabinet wall, in the far right of the frame: part of a solid wood dining table, one chair pulled slightly out, and a tall side window. Warm-grey mineral plaster wall, fine natural oak grain with subtle colour variation, pale oak plank floor. On the table: one handmade ceramic cup and one shallow plate. Nothing overlaps the niche.\n",
+    "{光线}\n",
+    "Very fine film grain, crisp but not over-sharpened, low saturation but not grey. No text, no watermark, not a 3D render, no ultra-wide distortion."
+  ],
+  "文字约束": "",
+  "negative_prompt": "text, letters, logo, watermark, refrigerator inside the niche, niche filled, niche shifted, enlarged niche, misaligned door joints, uneven plinth, wrong perspective, leftover flat color blocks, people, 3D render, plastic look, heavy HDR"
+}
