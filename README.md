@@ -21,7 +21,7 @@
 styles/cover-home/      封面版式（玻璃门款）：prompt、随机项、样图记录
 content/产品规格.json    8 款型号规格；调优测试款：润玉白 AA21C、岩雾灰 AA31C、星纱硬 AA28C、橱柜门 AR89C
 content/examples/       内容示例（标题、副标题、卖点）
-assets/                 产品图与家居实景图（不入库，见 assets/README.md）
+assets/                 品牌方素材，按型号分文件夹（见 assets/README.md）
 src/poster/             出图代码（仅 Python 标准库）
 docs/开发对接说明.md     工作流接入说明
 ```

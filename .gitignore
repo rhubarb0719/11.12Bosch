@@ -2,7 +2,4 @@ output/
 __pycache__/
 *.pyc
 .env
-# 品牌素材不入库
-assets/**/*
-!assets/**/
-!assets/README.md
+.DS_Store
